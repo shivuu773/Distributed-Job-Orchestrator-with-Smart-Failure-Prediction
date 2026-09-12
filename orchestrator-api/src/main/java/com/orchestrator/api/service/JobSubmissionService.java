@@ -1,11 +1,11 @@
 package com.orchestrator.api.service;
 
+
 import com.orchestrator.api.dto.JobSubmissionRequest;
 import com.orchestrator.api.dto.JobResponse;
 import com.orchestrator.core.domain.Job;
 import com.orchestrator.core.domain.JobState;
 import com.orchestrator.api.repository.JobRepository;
-import com.orchestrator.api.ai.GeminiRiskPredictor;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,27 +16,22 @@ import java.util.UUID;
 public class JobSubmissionService {
 
     private final JobRepository jobRepository;
-    private final GeminiRiskPredictor aiPredictor;
+    private final LocalRiskEvaluator riskEvaluator;
 
-    public JobSubmissionService(JobRepository jobRepository, GeminiRiskPredictor aiPredictor) {
+    // Constructor Injection
+    public JobSubmissionService(JobRepository jobRepository, LocalRiskEvaluator riskEvaluator) {
         this.jobRepository = jobRepository;
-        this.aiPredictor = aiPredictor;
+        this.riskEvaluator = riskEvaluator;
     }
 
     @Transactional
     public JobResponse submitAndEvaluateJob(JobSubmissionRequest request) {
         
-        int riskScore = 1; 
-        long predictedDuration = 1000L; 
+        // 1. Evaluate locally
+        int riskScore = riskEvaluator.evaluateRisk(request.getType(), request.getPayload());
+        long predictedDuration = riskEvaluator.estimateDuration(request.getType());
 
-        try {
-            riskScore = aiPredictor.predictRisk(request.getType(), request.getPayload());
-            predictedDuration = aiPredictor.predictDuration(request.getType());
-        } catch (Exception e) {
-            System.err.println("AI API unavailable. Fallback applied. Reason: " + e.getMessage());
-            riskScore = calculateFallbackRisk(request.getType());
-        }
-
+        // 2. Create Job Entity
         Job newJob = new Job();
         newJob.setId(UUID.randomUUID().toString());
         newJob.setType(request.getType());
@@ -45,20 +40,17 @@ public class JobSubmissionService {
         newJob.setRiskScore(riskScore);
         newJob.setPredictedDurationMs(predictedDuration);
         newJob.setCreatedAt(LocalDateTime.now());
+        newJob.setUpdatedAt(LocalDateTime.now());
 
+        // 3. Save to Database
         Job savedJob = jobRepository.save(newJob);
 
+        // 4. Return Response
         return new JobResponse(
             savedJob.getId(),
             savedJob.getState().name(),
             savedJob.getType(),
             savedJob.getCreatedAt()
         );
-    }
-
-    private int calculateFallbackRisk(String jobType) {
-        if ("PAYMENT_PROCESSING".equalsIgnoreCase(jobType)) return 8; 
-        if ("EMAIL_NOTIFICATION".equalsIgnoreCase(jobType)) return 2; 
-        return 5; 
     }
 }
